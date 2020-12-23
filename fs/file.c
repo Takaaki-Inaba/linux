@@ -152,12 +152,18 @@ static int expand_fdtable(struct files_struct *files, unsigned int nr)
 	struct fdtable *new_fdt, *cur_fdt;
 
 	spin_unlock(&files->file_lock);
+
+	// 新しいファイルディスクリプタテーブルの領域を確保
 	new_fdt = alloc_fdtable(nr);
 
 	/* make sure all __fd_install() have seen resize_in_progress
 	 * or have finished their rcu_read_lock_sched() section.
 	 */
 	if (atomic_read(&files->count) > 1)
+		// files->countはスレッド生成時にカウントアップされる
+		// ここにはいるのは、おそらくマルチスレッド実行時に
+		// ファイルディスクリプタテーブルを拡張する必要があるとき
+		// すべてのスレッドが__fd_install()を実行したことを保証する
 		synchronize_sched();
 
 	spin_lock(&files->file_lock);
@@ -198,13 +204,16 @@ static int expand_files(struct files_struct *files, unsigned int nr)
 	int expanded = 0;
 
 repeat:
+	// ファイルディスクリプタテーブルを取り出し
 	fdt = files_fdtable(files);
 
 	/* Do we need to expand? */
+	// ファイルディスクリプタテーブルの拡張は不要
 	if (nr < fdt->max_fds)
 		return expanded;
 
 	/* Can we expand? */
+	// sysctl_nr_openはカーネル全プロセスでの最大オープン可能なリミット
 	if (nr >= sysctl_nr_open)
 		return -EMFILE;
 
@@ -218,6 +227,7 @@ repeat:
 
 	/* All good, so we try */
 	files->resize_in_progress = true;
+	// ファイルディスクリプタテーブルを拡張して、既存のやつをコピー
 	expanded = expand_fdtable(files, nr);
 	files->resize_in_progress = false;
 
@@ -269,6 +279,7 @@ static unsigned int count_open_files(struct fdtable *fdt)
  * passed in files structure.
  * errorp will be valid only when the returned files_struct is NULL.
  */
+// files_structを複製する
 struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 {
 	struct files_struct *newf;
@@ -289,9 +300,11 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 	newf->next_fd = 0;
 	new_fdt = &newf->fdtab;
 	new_fdt->max_fds = NR_OPEN_DEFAULT;
+	// このフィールドは初期化時のみ使用する.
 	new_fdt->close_on_exec = newf->close_on_exec_init;
 	new_fdt->open_fds = newf->open_fds_init;
 	new_fdt->full_fds_bits = newf->full_fds_bits_init;
+	// 初期化時はここをポイントするけど、拡張時はallocateして別の領域をポイントするようになる
 	new_fdt->fd = &newf->fd_array[0];
 
 	spin_lock(&oldf->file_lock);
@@ -335,6 +348,7 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 	old_fds = old_fdt->fd;
 	new_fds = new_fdt->fd;
 
+	// 親プロセスがopenしたfile構造体を子プロセスにもコピーする
 	for (i = open_files; i != 0; i--) {
 		struct file *f = *old_fds++;
 		if (f) {
@@ -483,14 +497,17 @@ int __alloc_fd(struct files_struct *files,
 	int error;
 	struct fdtable *fdt;
 
+	// 実行中のプロセスのオープンファイルテーブルが変更されないようにロックを取得
 	spin_lock(&files->file_lock);
 repeat:
+	// ファイルディスクリプタテーブルを取り出し
 	fdt = files_fdtable(files);
 	fd = start;
 	if (fd < files->next_fd)
 		fd = files->next_fd;
 
 	if (fd < fdt->max_fds)
+		// ファイルディスクリプタテーブルの空き領域を探索
 		fd = find_next_fd(fdt, fd);
 
 	/*
@@ -499,8 +516,10 @@ repeat:
 	 */
 	error = -EMFILE;
 	if (fd >= end)
+		// ファイルディスクリプタテーブルに空き領域がなかった
 		goto out;
 
+	// 必要ならオープンファイルテーブルを拡張する
 	error = expand_files(files, fd);
 	if (error < 0)
 		goto out;
@@ -513,10 +532,15 @@ repeat:
 		goto repeat;
 
 	if (start <= files->next_fd)
+		// 次のファイルディスクリプタの値をセット.
+		// ただこの値が必ず次のfdになるわけではない
 		files->next_fd = fd + 1;
 
+	// ファイルディスクリプタテーブルのオープン済みのfdフィールドのフラグを立てる
 	__set_open_fd(fd, fdt);
 	if (flags & O_CLOEXEC)
+		// close on execフラグが指定されてたら、ファイルディスクリプタフラグ
+		// のビットマップにセットする
 		__set_close_on_exec(fd, fdt);
 	else
 		__clear_close_on_exec(fd, fdt);
@@ -550,12 +574,14 @@ static void __put_unused_fd(struct files_struct *files, unsigned int fd)
 	struct fdtable *fdt = files_fdtable(files);
 	__clear_open_fd(fd, fdt);
 	if (fd < files->next_fd)
+		// open時に探索開始場所としてのnext_fdを更新する
 		files->next_fd = fd;
 }
 
 void put_unused_fd(unsigned int fd)
 {
 	struct files_struct *files = current->files;
+	// 複数のコンテキストが同時にオープンファイルテーブルを編集する可能性があるのでロックする
 	spin_lock(&files->file_lock);
 	__put_unused_fd(files, fd);
 	spin_unlock(&files->file_lock);
@@ -588,6 +614,7 @@ void __fd_install(struct files_struct *files, unsigned int fd,
 {
 	struct fdtable *fdt;
 
+	// プリエンプションを禁止する
 	rcu_read_lock_sched();
 
 	if (unlikely(files->resize_in_progress)) {
@@ -600,10 +627,20 @@ void __fd_install(struct files_struct *files, unsigned int fd,
 		return;
 	}
 	/* coupled with smp_wmb() in expand_fdtable() */
+	// expand_fdtable()が行われていた場合、ファイルディスクリプタテーブルが
+	// 拡張されている可能性があり、その内容のメモリ反映を保証する
 	smp_rmb();
+
+	// 深堀
 	fdt = rcu_dereference_sched(files->fdt);
+
 	BUG_ON(fdt->fd[fd] != NULL);
+
+	// fdt自体が複数のコンテキストで参照されるので、fdtを更新する場合はRCUで保護する必要がある.
+	// なのでこの行は実質的に fdt->fd[fd] = file; と同義
 	rcu_assign_pointer(fdt->fd[fd], file);
+
+	// クリティカルセクション終了
 	rcu_read_unlock_sched();
 }
 

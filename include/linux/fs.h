@@ -230,7 +230,7 @@ struct iattr {
  */
 #define FILESYSTEM_MAX_STACK_DEPTH 2
 
-/** 
+/**
  * enum positive_aop_returns - aop return codes with specific semantics
  *
  * @AOP_WRITEPAGE_ACTIVATE: Informs the caller that page writeback has
@@ -240,7 +240,7 @@ struct iattr {
  * 			    be a candidate for writeback again in the near
  * 			    future.  Other callers must be careful to unlock
  * 			    the page if they get this return.  Returned by
- * 			    writepage(); 
+ * 			    writepage();
  *
  * @AOP_TRUNCATED_PAGE: The AOP method that was handed a locked page has
  *  			unlocked it and the page might have been truncated.
@@ -856,6 +856,10 @@ static inline int ra_has_index(struct file_ra_state *ra, pgoff_t index)
 		index <  ra->start + ra->size);
 }
 
+// この構造体の配列がオープンファイルテーブルになる
+// dup()ではこの構造体は共有される
+// fork()では親子でこの構造体を共有する
+// open()されればこの構造体が新しく作られる
 struct file {
 	union {
 		struct llist_node	fu_llist;
@@ -863,6 +867,9 @@ struct file {
 	} f_u;
 	struct path		f_path;
 	struct inode		*f_inode;	/* cached value */
+
+	// このファイルに対する実際のオペレーションのハンドラを保持する
+	// デバイスドライバなどのカーネルモジュールを作るときによくお世話になる
 	const struct file_operations	*f_op;
 
 	/*
@@ -871,11 +878,20 @@ struct file {
 	 */
 	spinlock_t		f_lock;
 	enum rw_hint		f_write_hint;
+
+	// 参照カウンタ.openでカウントアップされ、closeでカウントダウンする
+	// rmしてもcloseするまでファイルが消えないのは、このカウンタが0でない限り
+	// ファイルとして残るから
 	atomic_long_t		f_count;
+
+	// オープンファイルステータスフラグ
 	unsigned int 		f_flags;
 	fmode_t			f_mode;
+
+	// ファイル位置指定子
 	struct mutex		f_pos_lock;
 	loff_t			f_pos;
+
 	struct fown_struct	f_owner;
 	const struct cred	*f_cred;
 	struct file_ra_state	f_ra;
@@ -915,8 +931,8 @@ static inline struct file *get_file(struct file *f)
 
 #define	MAX_NON_LFS	((1UL<<31) - 1)
 
-/* Page cache limit. The filesystems should put that into their s_maxbytes 
-   limits, otherwise bad things can happen in VM. */ 
+/* Page cache limit. The filesystems should put that into their s_maxbytes
+   limits, otherwise bad things can happen in VM. */
 #if BITS_PER_LONG==32
 #define MAX_LFS_FILESIZE	((loff_t)ULONG_MAX << PAGE_SHIFT)
 #elif BITS_PER_LONG==64
@@ -2088,7 +2104,7 @@ int sync_inode_metadata(struct inode *inode, int wait);
 struct file_system_type {
 	const char *name;
 	int fs_flags;
-#define FS_REQUIRES_DEV		1 
+#define FS_REQUIRES_DEV		1
 #define FS_BINARY_MOUNTDATA	2
 #define FS_HAS_SUBTYPE		4
 #define FS_USERNS_MOUNT		8	/* Can be mounted by userns root */
@@ -2401,10 +2417,15 @@ static inline int break_layout(struct inode *inode, bool wait)
 /* fs/open.c */
 struct audit_names;
 struct filename {
+	// kernelspace内で保持してるファイルパスへのポインタ
 	const char		*name;	/* pointer to actual string */
+	// userspaceから渡された元のファイルパスへのポインタ
 	const __user char	*uptr;	/* original userland pointer */
+	// このファイルの参照カウンタ.audit関連で使ってるぽい
 	int			refcnt;
+	// TODO: 調査
 	struct audit_names	*aname;
+	// ファイル名がPATH_MAX未満の場合にファイル名が入る
 	const char		iname[];
 };
 
@@ -2866,7 +2887,7 @@ extern ssize_t kernel_read(struct file *, void *, size_t, loff_t *);
 extern ssize_t kernel_write(struct file *, const void *, size_t, loff_t *);
 extern ssize_t __kernel_write(struct file *, const void *, size_t, loff_t *);
 extern struct file * open_exec(const char *);
- 
+
 /* fs/dcache.c -- generic fs support functions */
 extern bool is_subdir(struct dentry *, struct dentry *);
 extern bool path_is_under(const struct path *, const struct path *);
@@ -3363,6 +3384,7 @@ int __init get_filesystem_list(char *buf);
 #define __FMODE_EXEC		((__force int) FMODE_EXEC)
 #define __FMODE_NONOTIFY	((__force int) FMODE_NONOTIFY)
 
+// 読み込み／書き込み／読み書きのモードを計算するマクロで、読み込みモードまたは読み書きモードの場合には MAY_READ というビット値を含む値を返却する
 #define ACC_MODE(x) ("\004\002\006\006"[(x)&O_ACCMODE])
 #define OPEN_FMODE(flag) ((__force fmode_t)(((flag + 1) & O_ACCMODE) | \
 					    (flag & __FMODE_NONOTIFY)))

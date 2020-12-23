@@ -24,10 +24,15 @@
 #define NR_OPEN_DEFAULT BITS_PER_LONG
 
 struct fdtable {
+	// fdの配列の最大インデックス
 	unsigned int max_fds;
+	// file構造体の配列.この配列の添字がfdになる.
 	struct file __rcu **fd;      /* current fd array */
+	// close on execがセットされているfdのビットマップ
 	unsigned long *close_on_exec;
+	// オープン済みのfdのビットマップ
 	unsigned long *open_fds;
+	// TODO: 調査
 	unsigned long *full_fds_bits;
 	struct rcu_head rcu;
 };
@@ -49,20 +54,38 @@ struct files_struct {
   /*
    * read mostly part
    */
+	// ファイルディスクリプタテーブルの参照カウント.
+	// POSIXスレッド生成時は親子でfdtを共有するので、カウントアップする
+	// プロセス生成時はfdtをコピーするので、カウントアップはされない
+	// このカウントが0になったらfdtは解放される
 	atomic_t count;
+
+	// fdtを拡張している場合true
 	bool resize_in_progress;
+	// fdtを拡張している間のwait用
 	wait_queue_head_t resize_wait;
 
+	// fdtabを指している.RCUで保護するためにポインタにしたぽい
 	struct fdtable __rcu *fdt;
+	// ファイルディスクリプタテーブルの実態
+	// ただこれが直接使われているとこは少ない。基本はfdt経由でRCUと組み合わせて使われてる
 	struct fdtable fdtab;
   /*
    * written part on a separate cache line in SMP
    */
+	// ファイルディスクリプタテーブルのためのロック
 	spinlock_t file_lock ____cacheline_aligned_in_smp;
+	// fdの空き情報のヒント
 	unsigned int next_fd;
+
+	// 初期化時にfdtable内のポインタにささせるためのやつ
+	// ビットマップとして使用するので、64個まで使える
 	unsigned long close_on_exec_init[1];
 	unsigned long open_fds_init[1];
 	unsigned long full_fds_bits_init[1];
+
+	// fdt->fdのポイント先. NR_OPEN_DEFAULT以上ならば拡張して
+	// fdt->fdのポイント先を変更し、ここは使用しなくなる
 	struct file __rcu * fd_array[NR_OPEN_DEFAULT];
 };
 

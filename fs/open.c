@@ -930,7 +930,7 @@ struct file *dentry_open(const struct path *path, int flags,
 				fput(f);
 				f = ERR_PTR(error);
 			}
-		} else { 
+		} else {
 			put_filp(f);
 			f = ERR_PTR(error);
 		}
@@ -942,6 +942,7 @@ EXPORT_SYMBOL(dentry_open);
 static inline int build_open_flags(int flags, umode_t mode, struct open_flags *op)
 {
 	int lookup_flags = 0;
+	// アクセスモード（READ/WRITE/READ_WRITE）を取得
 	int acc_mode = ACC_MODE(flags);
 
 	/*
@@ -950,9 +951,11 @@ static inline int build_open_flags(int flags, umode_t mode, struct open_flags *o
 	 */
 	flags &= VALID_OPEN_FLAGS;
 
+
 	if (flags & (O_CREAT | __O_TMPFILE))
 		op->mode = (mode & S_IALLUGO) | S_IFREG;
 	else
+		// O_CREATもO_TMPFILEも渡されてないならmodeを無視する
 		op->mode = 0;
 
 	/* Must never be set by userspace */
@@ -1043,7 +1046,7 @@ struct file *filp_open(const char *filename, int flags, umode_t mode)
 {
 	struct filename *name = getname_kernel(filename);
 	struct file *file = ERR_CAST(name);
-	
+
 	if (!IS_ERR(name)) {
 		file = file_open_name(name, flags, mode);
 		putname(name);
@@ -1086,27 +1089,35 @@ EXPORT_SYMBOL(filp_clone_open);
 long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 {
 	struct open_flags op;
+	// open(2)で指定されたflagsを解析して、open_flags構造体に値をセット
 	int fd = build_open_flags(flags, mode, &op);
 	struct filename *tmp;
 
 	if (fd)
 		return fd;
 
+	// userspaceから渡されたファイル名からkernelspaceで使うファイル名にコピー
 	tmp = getname(filename);
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
 
+	// まだ使用していないfdを割り当てる
 	fd = get_unused_fd_flags(flags);
 	if (fd >= 0) {
+		// ファイルパス解決
 		struct file *f = do_filp_open(dfd, tmp, &op);
 		if (IS_ERR(f)) {
+			// ファイルが見つからなかったら、確保したfdのリソースを解放
 			put_unused_fd(fd);
 			fd = PTR_ERR(f);
 		} else {
+			// ファイルが見つかれば、プロセスのオープンファイルテーブルに登録する
 			fsnotify_open(f);
+			// プロセスのファイルディスクリプタテーブルに紐付け
 			fd_install(fd, f);
 		}
 	}
+	// getname()で確保したリソースを解放
 	putname(tmp);
 	return fd;
 }
@@ -1119,15 +1130,19 @@ SYSCALL_DEFINE3(open, const char __user *, filename, int, flags, umode_t, mode)
 	return do_sys_open(AT_FDCWD, filename, flags, mode);
 }
 
+// TODO: openatの説明
 SYSCALL_DEFINE4(openat, int, dfd, const char __user *, filename, int, flags,
 		umode_t, mode)
 {
+	// 64bitアプリケーションの場合は強制的にO_LARGEFILEフラグを立てる
+	// このフラグにより2GB以上のファイルを扱えるようになる
 	if (force_o_largefile())
 		flags |= O_LARGEFILE;
 
 	return do_sys_open(dfd, filename, flags, mode);
 }
 
+// TODO: COMPATについて調査.たぶん32/64bit環境での動作に関するものだと思う
 #ifdef CONFIG_COMPAT
 /*
  * Exactly like sys_open(), except that it doesn't set the

@@ -53,8 +53,8 @@
  * The new code replaces the old recursive symlink resolution with
  * an iterative one (in case of non-nested symlink chains).  It does
  * this with calls to <fs>_follow_link().
- * As a side effect, dir_namei(), _namei() and follow_link() are now 
- * replaced with a single function lookup_dentry() that can handle all 
+ * As a side effect, dir_namei(), _namei() and follow_link() are now
+ * replaced with a single function lookup_dentry() that can handle all
  * the special cases of the former code.
  *
  * With the new dcache, the pathname is stored at each inode, at least as
@@ -3513,6 +3513,7 @@ static struct file *path_openat(struct nameidata *nd,
 	int opened = 0;
 	int error;
 
+	// file構造体のリソース確保
 	file = get_empty_filp();
 	if (IS_ERR(file))
 		return file;
@@ -3536,6 +3537,7 @@ static struct file *path_openat(struct nameidata *nd,
 		put_filp(file);
 		return ERR_CAST(s);
 	}
+	// ファイル探索のメイン処理
 	while (!(error = link_path_walk(s, nd)) &&
 		(error = do_last(nd, file, op, &opened)) > 0) {
 		nd->flags &= ~(LOOKUP_OPEN|LOOKUP_CREATE|LOOKUP_EXCL);
