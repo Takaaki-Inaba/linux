@@ -410,6 +410,8 @@ int unhandled_signal(struct task_struct *tsk, int sig);
 #define sig_kernel_stop(sig)		siginmask(sig, SIG_KERNEL_STOP_MASK)
 #define sig_specific_sicodes(sig)	siginmask(sig, SIG_SPECIFIC_SICODES_MASK)
 
+// 標準シグナルでデフォルト動作が無視または停止でなく、シグナルアクションがSIG_DFLでないならtrue
+// リアルタイムシグナルならsignrのシグナルアクションがSIG_DFLならtrue
 #define sig_fatal(t, signr) \
 	(!siginmask(signr, SIG_KERNEL_IGNORE_MASK|SIG_KERNEL_STOP_MASK) && \
 	 (t)->sighand->action[(signr)-1].sa.sa_handler == SIG_DFL)

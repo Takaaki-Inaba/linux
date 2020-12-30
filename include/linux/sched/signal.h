@@ -463,8 +463,11 @@ static inline int kill_cad_pid(int sig, int priv)
 }
 
 /* These can be the second arg to send_sig_info/send_group_sig_info.  */
+// ユーザがシグナルを発行した
 #define SEND_SIG_NOINFO ((struct siginfo *) 0)
+// カーネルの内部イベントでシグナルが生成された
 #define SEND_SIG_PRIV	((struct siginfo *) 1)
+// カーネルの内部イベントでSIGKILL, SIGSTOPが生成された. OOMKとかで使われてる
 #define SEND_SIG_FORCED	((struct siginfo *) 2)
 
 /*

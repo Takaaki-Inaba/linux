@@ -85,6 +85,7 @@ static int sig_task_ignored(struct task_struct *t, int sig, bool force)
 	return sig_handler_ignored(handler, sig);
 }
 
+// 送信先のプロセスがシグナルを無視していたらtrue
 static int sig_ignored(struct task_struct *t, int sig, bool force)
 {
 	/*
@@ -666,6 +667,9 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
  */
 void signal_wake_up_state(struct task_struct *t, unsigned int state)
 {
+	// 送信先プロセスのtask_struct構造体にシグナルの保留フラグを立てる
+	// 送信先プロセスはシステムコール実行中であれば、ユーザ空間に戻るときに
+	// このフラグをチェックしてシステムコールのRESTARTとかをやったりする
 	set_tsk_thread_flag(t, TIF_SIGPENDING);
 	/*
 	 * TASK_WAKEKILL also means wake it up in the stopped/traced/killable
@@ -674,7 +678,11 @@ void signal_wake_up_state(struct task_struct *t, unsigned int state)
 	 * By using wake_up_state, we ensure the process will wake up and
 	 * handle its death signal.
 	 */
+	// プロセスを起床させる
+	// 送信先プロセスをTASK_RUNNINGにしてローカルCPU上の待ちキューに挿入する
+	// すでに起動状態なら、wake_up_stateは1を返してきて終了
 	if (!wake_up_state(t, state | TASK_INTERRUPTIBLE))
+		//
 		kick_process(t);
 }
 
@@ -703,11 +711,13 @@ static int flush_sigqueue_mask(sigset_t *mask, struct sigpending *s)
 	return 1;
 }
 
+// infoがアドレスを持たない場合はtrue. ユーザ空間以外でシグナルが発行されたらinfoがアドレスではなくなる
 static inline int is_si_special(const struct siginfo *info)
 {
 	return info <= SEND_SIG_FORCED;
 }
 
+// シグナルがユーザ空間から発行された場合true
 static inline bool si_fromuser(const struct siginfo *info)
 {
 	return info == SEND_SIG_NOINFO ||
@@ -886,12 +896,16 @@ static inline int wants_signal(int sig, struct task_struct *p)
 {
 	if (sigismember(&p->blocked, sig))
 		return 0;
+	// PF_EXITINGはプロセスが終了処理中ならtrue
 	if (p->flags & PF_EXITING)
 		return 0;
 	if (sig == SIGKILL)
 		return 1;
+	// task_is_stopped_or_tracedはプロセスの状態が一時停止中かデバッガなどで停止中ならtrue
 	if (task_is_stopped_or_traced(p))
 		return 0;
+	// 送信先プロセスがこのコンテキストを実行しているCPUと同じCPUで実行されている
+	// または送信先プロセスがシグナルを保留していない
 	return task_curr(p) || !signal_pending(p);
 }
 
@@ -906,6 +920,7 @@ static void complete_signal(int sig, struct task_struct *p, int group)
 	 * If the main thread wants the signal, it gets first crack.
 	 * Probably the least surprising to the average bear.
 	 */
+	// 送信先がシグナルを保留していないまたは自分自身に送っている場合
 	if (wants_signal(sig, p))
 		t = p;
 	else if (!group || thread_group_empty(p))
@@ -915,6 +930,8 @@ static void complete_signal(int sig, struct task_struct *p, int group)
 		 */
 		return;
 	else {
+		// ブロックされている場合、送信先プロセスのスレッドグループ内を走査して
+		// ブロックしていないスレッドを探す
 		/*
 		 * Otherwise try to find a suitable thread.
 		 */
@@ -936,13 +953,15 @@ static void complete_signal(int sig, struct task_struct *p, int group)
 	 * Found a killable thread.  If the signal will be fatal,
 	 * then start taking the whole group down immediately.
 	 */
+	// 致命的なシグナルであれば、同じスレッドグループ全体のスレッドにシグナルを送信する
 	if (sig_fatal(p, sig) &&
-	    !(signal->flags & SIGNAL_GROUP_EXIT) &&
-	    !sigismember(&t->real_blocked, sig) &&
+	    !(signal->flags & SIGNAL_GROUP_EXIT) &&   	// 送信先スレッドグループが終了中ではない
+	    !sigismember(&t->real_blocked, sig) &&  	// シグナルがブロックされていない
 	    (sig == SIGKILL || !p->ptrace)) {
 		/*
 		 * This signal will be fatal to the whole group.
 		 */
+		// sig_kernel_coredumpは標準動作がコアダンプならtrue
 		if (!sig_kernel_coredump(sig)) {
 			/*
 			 * Start a group exit and wake everybody up.
@@ -967,6 +986,7 @@ static void complete_signal(int sig, struct task_struct *p, int group)
 	 * The signal is already in the shared-pending queue.
 	 * Tell the chosen thread to wake up and dequeue it.
 	 */
+	// 送信先プロセスにシグナルが配送されたことを通知する
 	signal_wake_up(t, sig == SIGKILL);
 	return;
 }
@@ -1008,6 +1028,7 @@ static int __send_signal(int sig, struct siginfo *info, struct task_struct *t,
 	assert_spin_locked(&t->sighand->siglock);
 
 	result = TRACE_SIGNAL_IGNORED;
+	// 送信先のプロセスがシグナルを無視していたら goto retしてシグナルを送らない
 	if (!prepare_signal(sig, t,
 			from_ancestor_ns || (info == SEND_SIG_FORCED)))
 		goto ret;
@@ -1019,6 +1040,7 @@ static int __send_signal(int sig, struct siginfo *info, struct task_struct *t,
 	 * detailed information about the cause of the signal.
 	 */
 	result = TRACE_SIGNAL_ALREADY_PENDING;
+	// 標準シグナルですでにシグナルが配送されているなら、シグナルを再配送しない
 	if (legacy_queue(pending, sig))
 		goto ret;
 
@@ -1040,6 +1062,7 @@ static int __send_signal(int sig, struct siginfo *info, struct task_struct *t,
 	 * pass on the info struct.
 	 */
 	if (sig < SIGRTMIN)
+		// ユーザ空間からkillによりシグナルが送られた場合は、override_rlimitはtrue
 		override_rlimit = (is_si_special(info) || info->si_code >= 0);
 	else
 		override_rlimit = 0;
@@ -1095,19 +1118,24 @@ static int __send_signal(int sig, struct siginfo *info, struct task_struct *t,
 
 out_set:
 	signalfd_notify(t, sig);
+	// 保留中シグナルのビットセットに送信されたシグナルを追加
 	sigaddset(&pending->signal, sig);
+	// 送信されたシグナルを保留しているプロセスを起床させる
 	complete_signal(sig, t, group);
 ret:
 	trace_signal_generate(sig, info, t, group, result);
 	return ret;
 }
 
+// tにはシグナル送信先のプロセスのtask_structが入る
 static int send_signal(int sig, struct siginfo *info, struct task_struct *t,
 			int group)
 {
 	int from_ancestor_ns = 0;
 
 #ifdef CONFIG_PID_NS
+	// si_fromuserはシグナルがユーザ空間から送信されたかをチェックし
+	// task_pid_nr_nsはcurrentのpidをシグナル送信先プロセスの名前空間から取り出せるかをチェック
 	from_ancestor_ns = si_fromuser(info) &&
 			   !task_pid_nr_ns(current, task_active_pid_ns(t));
 #endif
@@ -1166,6 +1194,7 @@ int do_send_sig_info(int sig, struct siginfo *info, struct task_struct *p,
 	unsigned long flags;
 	int ret = -ESRCH;
 
+	// シグナルハンドラのロックを取得
 	if (lock_task_sighand(p, &flags)) {
 		ret = send_signal(sig, info, p, group);
 		unlock_task_sighand(p, &flags);
@@ -1279,6 +1308,7 @@ int group_send_sig_info(int sig, struct siginfo *info, struct task_struct *p)
 	int ret;
 
 	rcu_read_lock();
+	// シグナル送信のパーミッションチェック
 	ret = check_kill_permission(sig, info, p);
 	rcu_read_unlock();
 
@@ -1315,6 +1345,7 @@ int kill_pid_info(int sig, struct siginfo *info, struct pid *pid)
 
 	for (;;) {
 		rcu_read_lock();
+		// pidからtask_structを取り出し
 		p = pid_task(pid, PIDTYPE_PID);
 		if (p)
 			error = group_send_sig_info(sig, info, p);
@@ -1398,12 +1429,15 @@ static int kill_something_info(int sig, struct siginfo *info, pid_t pid)
 {
 	int ret;
 
+	// 普通にプロセスに対してシグナルを送信する場合
 	if (pid > 0) {
 		rcu_read_lock();
 		ret = kill_pid_info(sig, info, find_vpid(pid));
 		rcu_read_unlock();
 		return ret;
 	}
+
+	// 以下はプロセスグループに対してシグナルを送るケース
 
 	/* -INT_MIN is undefined.  Exclude this case to avoid a UBSAN warning */
 	if (pid == INT_MIN)
@@ -2475,7 +2509,7 @@ relock:
 }
 
 /**
- * signal_delivered - 
+ * signal_delivered -
  * @ksig:		kernel signal struct
  * @stepping:		nonzero if debugger single-step or block-step in use
  *
@@ -3703,7 +3737,7 @@ COMPAT_SYSCALL_DEFINE4(rt_sigaction, int, sig,
 
 	ret = do_sigaction(sig, act ? &new_ka : NULL, oact ? &old_ka : NULL);
 	if (!ret && oact) {
-		ret = put_user(ptr_to_compat(old_ka.sa.sa_handler), 
+		ret = put_user(ptr_to_compat(old_ka.sa.sa_handler),
 			       &oact->sa_handler);
 		ret |= put_compat_sigset(&oact->sa_mask, &old_ka.sa.sa_mask,
 					 sizeof(oact->sa_mask));
@@ -3882,7 +3916,7 @@ SYSCALL_DEFINE2(rt_sigsuspend, sigset_t __user *, unewset, size_t, sigsetsize)
 		return -EFAULT;
 	return sigsuspend(&newset);
 }
- 
+
 #ifdef CONFIG_COMPAT
 COMPAT_SYSCALL_DEFINE2(rt_sigsuspend, compat_sigset_t __user *, unewset, compat_size_t, sigsetsize)
 {
