@@ -64,6 +64,7 @@ static inline void kunmap(struct page *page)
 {
 }
 
+// page構造体の仮想アドレスを返却する
 static inline void *kmap_atomic(struct page *page)
 {
 	preempt_disable();

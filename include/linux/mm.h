@@ -1161,6 +1161,7 @@ static inline struct mem_cgroup *page_memcg_rcu(struct page *page)
  */
 #include <linux/vmstat.h>
 
+// pageの仮想アドレスを返す
 static __always_inline void *lowmem_page_address(const struct page *page)
 {
 	return page_to_virt(page);

@@ -903,7 +903,10 @@ EXPORT_SYMBOL(iov_iter_zero);
 size_t iov_iter_copy_from_user_atomic(struct page *page,
 		struct iov_iter *i, unsigned long offset, size_t bytes)
 {
+	// page構造体から仮想アドレスを取得
 	char *kaddr = kmap_atomic(page), *p = kaddr + offset;
+
+	// page構造体の仮想アドレスが正常化判断する
 	if (unlikely(!page_copy_sane(page, offset, bytes))) {
 		kunmap_atomic(kaddr);
 		return 0;
@@ -913,12 +916,15 @@ size_t iov_iter_copy_from_user_atomic(struct page *page,
 		WARN_ON(1);
 		return 0;
 	}
+
+	// iov_iter構造体が指しているそれぞれのデータをpが指す領域(ページフレーム)にコピー
 	iterate_all_kinds(i, bytes, v,
 		copyin((p += v.iov_len) - v.iov_len, v.iov_base, v.iov_len),
 		memcpy_from_page((p += v.bv_len) - v.bv_len, v.bv_page,
 				 v.bv_offset, v.bv_len),
 		memcpy((p += v.iov_len) - v.iov_len, v.iov_base, v.iov_len)
 	)
+	// 物理メモリに書き込んだのでページフォールトをオン
 	kunmap_atomic(kaddr);
 	return bytes;
 }

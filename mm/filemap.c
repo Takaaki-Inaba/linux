@@ -2930,6 +2930,7 @@ inline ssize_t generic_write_checks(struct kiocb *iocb, struct iov_iter *from)
 	loff_t pos;
 
 	if (!iov_iter_count(from))
+		// 書き込みバイト数が0
 		return 0;
 
 	/* FIXME: this is for backwards compatibility with 2.4 */
@@ -3126,33 +3127,41 @@ again:
 		 * to check that the address is actually valid, when atomic
 		 * usercopies are used, below.
 		 */
+		// デッドロックを回避するためにユーザ空間のバッファをコピーするためのページをあらかじめ
+		// ページフォールトさせて確保しておく
 		if (unlikely(iov_iter_fault_in_readable(i, bytes))) {
 			status = -EFAULT;
 			break;
 		}
 
+		// SIGKILLを受けていたら終了する
 		if (fatal_signal_pending(current)) {
 			status = -EINTR;
 			break;
 		}
 
+		// ページキャッシュを取得(pageにページフレームの物理アドレスが入る)
 		status = a_ops->write_begin(file, mapping, pos, bytes, flags,
 						&page, &fsdata);
 		if (unlikely(status < 0))
 			break;
 
 		if (mapping_writably_mapped(mapping))
+			// ページが共有ページ(mmapされているなどで)
 			flush_dcache_page(page);
 
+		// ユーザ空間のiov_iter構造体のバッファをpage構造体ポインタが指す場所にコピーする
 		copied = iov_iter_copy_from_user_atomic(page, i, offset, bytes);
 		flush_dcache_page(page);
 
+		// バッファにdirtyフラグを立てる
 		status = a_ops->write_end(file, mapping, pos, bytes, copied,
 						page, fsdata);
 		if (unlikely(status < 0))
 			break;
 		copied = status;
 
+		// 必要ならプリエンプションさせる
 		cond_resched();
 
 		iov_iter_advance(i, copied);
@@ -3206,11 +3215,15 @@ ssize_t __generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	ssize_t		status;
 
 	/* We can write back this queue in page reclaim */
+	// writebackキューに登録する
 	current->backing_dev_info = inode_to_bdi(inode);
+
+	// SUIDの削除
 	err = file_remove_privs(file);
 	if (err)
 		goto out;
 
+	// ファイルのタイムスタンプを更新
 	err = file_update_time(file);
 	if (err)
 		goto out;
@@ -3286,10 +3299,14 @@ ssize_t generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct inode *inode = file->f_mapping->host;
 	ssize_t ret;
 
+	// ファイルの整合性を保つためinodeのロックを取得
 	inode_lock(inode);
+
+	// 書き込みの正当性チェック(各種パラメータのバリデート)
 	ret = generic_write_checks(iocb, from);
 	if (ret > 0)
 		ret = __generic_file_write_iter(iocb, from);
+	// inodeのロックを解放
 	inode_unlock(inode);
 
 	if (ret > 0)

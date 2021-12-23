@@ -294,6 +294,7 @@ enum rw_hint {
 #define IOCB_WRITE		(1 << 6)
 #define IOCB_NOWAIT		(1 << 7)
 
+// 書き込み時に必要となるメタ情報を格納する
 struct kiocb {
 	struct file		*ki_filp;
 	loff_t			ki_pos;
@@ -331,16 +332,23 @@ typedef struct {
 typedef int (*read_actor_t)(read_descriptor_t *, struct page *,
 		unsigned long, unsigned long);
 
+// ページキャッシュに対する操作をセットする構造値
 struct address_space_operations {
+	// ページキャッシュへの書き込み(プロセス空間->ページ)
 	int (*writepage)(struct page *page, struct writeback_control *wbc);
+
+	// ページキャッシュへの読み込み(ディスク->ページ)
 	int (*readpage)(struct file *, struct page *);
 
 	/* Write back some dirty pages from this mapping. */
+	// writepageの複数ページ版
 	int (*writepages)(struct address_space *, struct writeback_control *);
 
 	/* Set a page dirty.  Return true if this dirtied it */
+	// ページキャッシュにdirtyフラグを立てる
 	int (*set_page_dirty)(struct page *page);
 
+	// readpageの複数ページ版
 	int (*readpages)(struct file *filp, struct address_space *mapping,
 			struct list_head *pages, unsigned nr_pages);
 
@@ -352,10 +360,17 @@ struct address_space_operations {
 				struct page *page, void *fsdata);
 
 	/* Unfortunately this kludge is needed for FIBMAP. Don't use it */
+	// ディスクブロック番号の取得
 	sector_t (*bmap)(struct address_space *, sector_t);
+
+	// ページキャッシュの無効化
 	void (*invalidatepage) (struct page *, unsigned int, unsigned int);
+
+	// ページキャッシュの解放
 	int (*releasepage) (struct page *, gfp_t);
 	void (*freepage)(struct page *);
+
+	// 直接転送
 	ssize_t (*direct_IO)(struct kiocb *, struct iov_iter *iter);
 	/*
 	 * migrate the contents of a page to the specified target. If
@@ -391,18 +406,39 @@ int pagecache_write_end(struct file *, struct address_space *mapping,
 				loff_t pos, unsigned len, unsigned copied,
 				struct page *page, void *fsdata);
 
+// ページキャッシュの扱いを管理する構造体でinodeと1対1で対応する
 struct address_space {
+	// 対応するinode構造体へのポインタ
 	struct inode		*host;		/* owner: inode, block_device */
+
+	// ページキャッシュリスト(昔はpage_treeだった)
+	// ページキャッシュで使うradix_treeは以下の特徴を持ってる
+	// 	- key-valueが一意に結びつく
+	// 	- slotsの各要素はノードへのポインタかstruct pageへのポインタかNULLである
+	// tagsはslotsの指す先の状態を示す。例えばページキャッシュをwrite backする際に、
+	// dirtyなページを見つけるためにページキャッシュの全ページを１つずつ確認するのではなく
+	// 対応するtagsのビットがセットされているslotsのみを走査することで、処理を高速化する。
 	struct radix_tree_root	i_pages;	/* cached pages */
+
+	// VM_SHAREDマップの数
 	atomic_t		i_mmap_writable;/* count VM_SHARED mappings */
+
+	// マップしているvm_area_structのリスト
 	struct rb_root_cached	i_mmap;		/* tree of private and shared mappings */
 	struct rw_semaphore	i_mmap_rwsem;	/* protect tree, count, list */
+
+	// ページキャッシュの総数
 	/* Protected by the i_pages lock */
 	unsigned long		nrpages;	/* number of total pages */
+
 	/* number of shadow or DAX exceptional entries */
 	unsigned long		nrexceptional;
+
+	// 次にwriteするときの開始地点のインデックス
 	pgoff_t			writeback_index;/* writeback starts here */
 	const struct address_space_operations *a_ops;	/* methods */
+
+	// エラービットとGFPマスク
 	unsigned long		flags;		/* error bits */
 	spinlock_t		private_lock;	/* for use by the address_space */
 	gfp_t			gfp_mask;	/* implicit gfp mask for allocations */
@@ -502,6 +538,7 @@ static inline int mapping_mapped(struct address_space *mapping)
  * If i_mmap_writable is negative, no new writable mappings are allowed. You
  * can only deny writable mappings, if none exists right now.
  */
+// 共有マップされていたらtrue
 static inline int mapping_writably_mapped(struct address_space *mapping)
 {
 	return atomic_read(&mapping->i_mmap_writable) > 0;
@@ -570,10 +607,15 @@ struct fsnotify_mark_connector;
  * of the 'struct inode'
  */
 struct inode {
+	// ファイルのモード(S_IFREG, S_IFDIR, S_IRUSRとか)
 	umode_t			i_mode;
 	unsigned short		i_opflags;
+
+	// ファイルのユーザID
 	kuid_t			i_uid;
+	// ファイルのグループID
 	kgid_t			i_gid;
+	// inodeの属性フラグ
 	unsigned int		i_flags;
 
 #ifdef CONFIG_FS_POSIX_ACL
@@ -582,7 +624,10 @@ struct inode {
 #endif
 
 	const struct inode_operations	*i_op;
+
+	// super_block構造体はファイルシステムを表してる
 	struct super_block	*i_sb;
+
 	struct address_space	*i_mapping;
 
 #ifdef CONFIG_SECURITY
@@ -621,6 +666,7 @@ struct inode {
 	unsigned long		i_state;
 	struct rw_semaphore	i_rwsem;
 
+	// dirtyになった時間(jiffies)
 	unsigned long		dirtied_when;	/* jiffies of first dirtying */
 	unsigned long		dirtied_time_when;
 
@@ -862,10 +908,15 @@ static inline int ra_has_index(struct file_ra_state *ra, pgoff_t index)
 // open()されればこの構造体が新しく作られる
 struct file {
 	union {
+		// TODO: 調査
 		struct llist_node	fu_llist;
 		struct rcu_head 	fu_rcuhead;
 	} f_u;
+
 	struct path		f_path;
+	// inode構造体のキャッシュ。inodeを取得するにはf_path->dentry->inodeと
+	// たどる必要があり、またinodeを参照することが多いので、openしたときに
+	// inode構造体をセットしてキャッシュする
 	struct inode		*f_inode;	/* cached value */
 
 	// このファイルに対する実際のオペレーションのハンドラを保持する
@@ -880,6 +931,7 @@ struct file {
 	enum rw_hint		f_write_hint;
 
 	// 参照カウンタ.openでカウントアップされ、closeでカウントダウンする
+	// forkでもカウントアップする
 	// rmしてもcloseするまでファイルが消えないのは、このカウンタが0でない限り
 	// ファイルとして残るから
 	atomic_long_t		f_count;
@@ -1253,6 +1305,7 @@ static inline void show_fd_locks(struct seq_file *f,
 			struct file *filp, struct files_struct *files) {}
 #endif /* !CONFIG_FILE_LOCKING */
 
+// file構造体にキャッシュされているinode構造体をreturnする
 static inline struct inode *file_inode(const struct file *f)
 {
 	return f->f_inode;
@@ -1361,7 +1414,11 @@ struct sb_writers {
 	struct percpu_rw_semaphore	rw_sem[SB_FREEZE_LEVELS];
 };
 
+// ファイルシステムを表現する構造体で、ファイルシステムとsuper_blockは一意に対応する
+// super_blockはどのファイルシステムでも共通の管理情報を扱っている
 struct super_block {
+	// すべてのsuper_blockオブジェクトは１つの双方向循環リストでつながっている。
+	// s_listは次のsuper_blockオブジェクトを指す
 	struct list_head	s_list;		/* Keep this first */
 	dev_t			s_dev;		/* search index; _not_ kdev_t */
 	unsigned char		s_blocksize_bits;
@@ -1467,6 +1524,10 @@ struct super_block {
 	struct list_head	s_inodes;	/* all inodes */
 
 	spinlock_t		s_inode_wblist_lock;
+
+	// writeはライトバックで一定期間ごとに記憶装置にフラッシュ処理を行う
+	// s_inodes_wbはライトバックが必要なファイル一覧のリストでinodeのリストになる
+	// writeが呼ばれるとこのリストが更新される
 	struct list_head	s_inodes_wb;	/* writeback inodes */
 } __randomize_layout;
 
@@ -1973,23 +2034,42 @@ static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *filp)
 
 /*
  * Inode state bits.  Protected by inode->i_lock
+ * inode->i_stateで使う状態管理を行うマクロ
+ * i_stateの変更時はi_lockに対してロックをかける必要がある
  *
  * Three bits determine the dirty state of the inode, I_DIRTY_SYNC,
  * I_DIRTY_DATASYNC and I_DIRTY_PAGES.
+ *
+ * I_DIRTY_SYNC, I_DIRTY_DATASYNC, I_DIRTY_PAGESはinodeの状態を決める
  *
  * Four bits define the lifetime of an inode.  Initially, inodes are I_NEW,
  * until that flag is cleared.  I_WILL_FREE, I_FREEING and I_CLEAR are set at
  * various stages of removing an inode.
  *
+ * I_NEW, I_WILL_FREE, I_FREEING, I_CLEARはinodeのライフサイクルに関するもの。
+ * 初期状態はI_NEWでその他のやつはinodeを削除するときにときに使われる
+ *
  * Two bits are used for locking and completion notification, I_NEW and I_SYNC.
+ *
+ * I_NEWとI_SYNCはロックと完了通知で使用される
+ *
  *
  * I_DIRTY_SYNC		Inode is dirty, but doesn't have to be written on
  *			fdatasync().  i_atime is the usual cause.
+ *			inodeはdirty状態だがfdatasync()を使って書き込む必要はない
+ *			inode構造体のメンバ自体を更新したことを意味する
+ *
  * I_DIRTY_DATASYNC	Data-related inode changes pending. We keep track of
  *			these changes separately from I_DIRTY_SYNC so that we
  *			don't have to write inode on fdatasync() when only
  *			mtime has changed in it.
+ *			データ部分のinodeの変更が保留されている状態。
+ *			I_DIRTY_DATASYNCはmtimeだけ変更された時にfdatasync()
+ *			を呼び出す必要がないようにしている
+ *
  * I_DIRTY_PAGES	Inode has dirty pages.  Inode itself may be clean.
+ * 			inodeがdirty状態。inode自体はcleanののときもある
+ *
  * I_NEW		Serves as both a mutex and completion notification.
  *			New inodes set I_NEW.  If two processes both create
  *			the same inode, one of them will release its inode and
@@ -2017,6 +2097,10 @@ static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *filp)
  *			data writeback, and cleared with a wakeup on the bit
  *			address once it is done. The bit is also used to pin
  *			the inode in memory for flusher thread.
+ *			inodeのwritebackが実行中。I_SYNCはデータがwriteback中に
+ *			セットされwritebackが完了するとwake_upでクリアされる。
+ *			また、flusherスレッドのためにinodeをメモリ上に固定する
+ *			ためにも使われる
  *
  * I_REFERENCED		Marks the inode as recently references on the LRU list.
  *
@@ -2101,9 +2185,19 @@ static inline void file_accessed(struct file *file)
 int sync_inode(struct inode *inode, struct writeback_control *wbc);
 int sync_inode_metadata(struct inode *inode, int wait);
 
+// ファイルシステムごとに１つ実態が作られる
+// 各ファイルシステムの初期化時に作成、リストに繋がれる。
 struct file_system_type {
+	// ファイルシステム名（ext4とか）
 	const char *name;
+
+	// ファイルシステムフラグ。下の定義値を入れる
 	int fs_flags;
+
+	/**
+	 * FS_REQUIRES_DEV: 物理デバイスに存在する
+	 * FS_BINARY_MOUNTDATA: ファイルシステムがバイナリのマウントデータを使用する
+	 */
 #define FS_REQUIRES_DEV		1
 #define FS_BINARY_MOUNTDATA	2
 #define FS_HAS_SUBTYPE		4
@@ -2111,9 +2205,17 @@ struct file_system_type {
 #define FS_RENAME_DOES_D_MOVE	32768	/* FS will handle d_move() during rename() internally. */
 	struct dentry *(*mount) (struct file_system_type *, int,
 		       const char *, void *);
+
+	// スーパーブロックの解放
 	void (*kill_sb) (struct super_block *);
+
+	// ファイルシステムを実装するモジュールへのポインタ
 	struct module *owner;
+
+	// file_system_typeは単方向リストで管理されていて、nextが次の要素へのポインタ
 	struct file_system_type * next;
+
+	// 同じ種類のファイルシステムのsuper_blockのリストの先頭
 	struct hlist_head fs_supers;
 
 	struct lock_class_key s_lock_key;
@@ -2258,7 +2360,10 @@ static inline int __mandatory_lock(struct inode *ino)
  * ... and these candidates should be on SB_MANDLOCK mounted fs,
  * otherwise these will be advisory locks
  */
-
+// 強制ロックに対応できる状態ならtrue
+// 強制ロックは、ファイルシステムマウント時に強制ロックを有効にしていること
+// ファイルの権限がグループ実行許可が無効 (g-x)かつSet Group IDが有効(g+s)
+// になっていることにより対応可能となる
 static inline int mandatory_lock(struct inode *ino)
 {
 	return IS_MANDLOCK(ino) && __mandatory_lock(ino);
@@ -2755,7 +2860,9 @@ static inline bool execute_ok(struct inode *inode)
 static inline void file_start_write(struct file *file)
 {
 	if (!S_ISREG(file_inode(file)->i_mode))
+		// 通常のファイルでなければreturn
 		return;
+	// suber_blockにファイル書き込みを通知する
 	__sb_start_write(file_inode(file)->i_sb, SB_FREEZE_WRITE, true);
 }
 

@@ -55,6 +55,11 @@
 
 static unsigned int i_hash_mask __read_mostly;
 static unsigned int i_hash_shift __read_mostly;
+
+// 検索を高速化するためのハッシュ化されたリストのテーブルを指すポインタ
+// inode構造体のi_hashを使ってリスト化されている
+// どのヘッドに繋がるかはinodeが所属するsuper_block構造体のアドレスと
+// inode構造体のi_noから計算される
 static struct hlist_head *inode_hashtable __read_mostly;
 static __cacheline_aligned_in_smp DEFINE_SPINLOCK(inode_hash_lock);
 
@@ -1621,6 +1626,7 @@ static int relatime_need_update(const struct path *path, struct inode *inode,
 	return 0;
 }
 
+// inodeの時間関係のメタデータを更新する
 int generic_update_time(struct inode *inode, struct timespec64 *time, int flags)
 {
 	int iflags = I_DIRTY_TIME;
@@ -1640,6 +1646,7 @@ int generic_update_time(struct inode *inode, struct timespec64 *time, int flags)
 
 	if (dirty)
 		iflags |= I_DIRTY_SYNC;
+	// inodeにdirtyフラグを立てる
 	__mark_inode_dirty(inode, iflags);
 	return 0;
 }
@@ -1653,6 +1660,7 @@ static int update_time(struct inode *inode, struct timespec64 *time, int flags)
 {
 	int (*update_time)(struct inode *, struct timespec64 *, int);
 
+	// ファイルシステム独自のupdate_time関数の実装があれば、そっちを使う
 	update_time = inode->i_op->update_time ? inode->i_op->update_time :
 		generic_update_time;
 
@@ -1848,8 +1856,10 @@ int file_update_time(struct file *file)
 
 	/* First try to exhaust all avenues to not sync */
 	if (IS_NOCMTIME(inode))
+		// S_NOCMTIMEが指定されていたら時間を更新しない
 		return 0;
 
+	// inodeにセットされている最終変更日時とinode変更日時が古い場合、sync_itにフラグをセット
 	now = current_time(inode);
 	if (!timespec64_equal(&inode->i_mtime, &now))
 		sync_it = S_MTIME;
@@ -1864,6 +1874,7 @@ int file_update_time(struct file *file)
 		return 0;
 
 	/* Finally allowed to write? Takes lock. */
+	// ファイルシステムが書き込み可能かチェックして、書き込み可能であればカウントアップ
 	if (__mnt_want_write_file(file))
 		return 0;
 

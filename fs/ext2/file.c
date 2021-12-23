@@ -173,6 +173,9 @@ static ssize_t ext2_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 static ssize_t ext2_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 #ifdef CONFIG_FS_DAX
+	// DAXについては以下の資料を参考
+	// https://www.slideshare.net/ygotokernel/nvdimmlinux-137104084
+	// 通常のアプリでは使用されてない
 	if (IS_DAX(iocb->ki_filp->f_mapping->host))
 		return ext2_dax_write_iter(iocb, from);
 #endif

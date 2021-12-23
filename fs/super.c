@@ -39,6 +39,7 @@
 
 static int thaw_super_locked(struct super_block *sb);
 
+// super_blockリストの先頭を指すポインタ
 static LIST_HEAD(super_blocks);
 static DEFINE_SPINLOCK(sb_lock);
 
@@ -1400,6 +1401,7 @@ int __sb_start_write(struct super_block *sb, int level, bool wait)
 	}
 #endif
 	if (wait && !force_trylock)
+		// super_blockが持つセマフォを獲得
 		percpu_down_read(sb->s_writers.rw_sem + level-1);
 	else
 		ret = percpu_down_read_trylock(sb->s_writers.rw_sem + level-1);

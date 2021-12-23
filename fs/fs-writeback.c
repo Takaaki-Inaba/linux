@@ -2147,16 +2147,20 @@ void __mark_inode_dirty(struct inode *inode, int flags)
 	if (unlikely(block_dump))
 		block_dump___mark_inode_dirty(inode);
 
+	// inodeのロックを取得
 	spin_lock(&inode->i_lock);
 	if (dirtytime && (inode->i_state & I_DIRTY_INODE))
 		goto out_unlock_inode;
 	if ((inode->i_state & flags) != flags) {
+		// すでにinodeがdirtyか
 		const int was_dirty = inode->i_state & I_DIRTY;
 
 		inode_attach_wb(inode, NULL);
 
 		if (flags & I_DIRTY_INODE)
 			inode->i_state &= ~I_DIRTY_TIME;
+
+		// inodeのフラグを更新
 		inode->i_state |= flags;
 
 		/*
@@ -2187,12 +2191,15 @@ void __mark_inode_dirty(struct inode *inode, int flags)
 			struct list_head *dirty_list;
 			bool wakeup_bdi = false;
 
+			// inodeからbdi_writebackを取得
+			// i_lockを解放し、wbのlist_lockのロックを取得
 			wb = locked_inode_to_wb_and_lock_list(inode);
 
 			WARN(bdi_cap_writeback_dirty(wb->bdi) &&
 			     !test_bit(WB_registered, &wb->state),
 			     "bdi-%s not registered\n", wb->bdi->name);
 
+			// dirtyになった時間をセット
 			inode->dirtied_when = jiffies;
 			if (dirtytime)
 				inode->dirtied_time_when = jiffies;
@@ -2202,6 +2209,7 @@ void __mark_inode_dirty(struct inode *inode, int flags)
 			else
 				dirty_list = &wb->b_dirty_time;
 
+			// inode->i_io_listをbdi_writeback->b_dirtyにmoveする
 			wakeup_bdi = inode_io_list_move_locked(inode, wb,
 							       dirty_list);
 

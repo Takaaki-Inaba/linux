@@ -769,12 +769,15 @@ static unsigned long __fget_light(unsigned int fd, fmode_t mask)
 	struct files_struct *files = current->files;
 	struct file *file;
 
+	// マルチスレッドで動作している場合、files->count>1になる
 	if (atomic_read(&files->count) == 1) {
+		// ファイルディスクリプタテーブルからfile構造体を取り出し
 		file = __fcheck_files(files, fd);
 		if (!file || unlikely(file->f_mode & mask))
 			return 0;
 		return (unsigned long)file;
 	} else {
+		// 参照カウントが1以上であればrcuを使ってfile構造体を取り出す
 		file = __fget(fd, mask);
 		if (!file)
 			return 0;
@@ -792,12 +795,15 @@ unsigned long __fdget_raw(unsigned int fd)
 	return __fget_light(fd, 0);
 }
 
+// ファイルディスクリプタからfile構造体を取得する
 unsigned long __fdget_pos(unsigned int fd)
 {
 	unsigned long v = __fdget(fd);
 	struct file *file = (struct file *)(v & ~3);
 
 	if (file && (file->f_mode & FMODE_ATOMIC_POS)) {
+		// マルチスレッドで動作している場合、オフセットのためのmutex_lockを取得する
+		// 取得したロックは、ksys_write関数の最後に実行しているfdput_pos関数で解放する
 		if (file_count(file) > 1) {
 			v |= FDPUT_POS_UNLOCK;
 			mutex_lock(&file->f_pos_lock);

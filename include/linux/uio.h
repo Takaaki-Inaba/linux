@@ -28,6 +28,7 @@ enum {
 	ITER_PIPE = 8,
 };
 
+// 複数の書き込み対象のデータに関する情報を管理する
 struct iov_iter {
 	int type;
 	size_t iov_offset;

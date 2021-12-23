@@ -370,8 +370,10 @@ int rw_verify_area(int read_write, struct file *file, const loff_t *ppos, size_t
 
 	inode = file_inode(file);
 	if (unlikely((ssize_t) count < 0))
+		// countがssize_tの最大値より大きい場合エラー(なぜ？？)
 		return retval;
 	pos = *ppos;
+	// ファイル位置指定子の範囲チェック
 	if (unlikely(pos < 0)) {
 		if (!unsigned_offsets(file))
 			return retval;
@@ -382,6 +384,7 @@ int rw_verify_area(int read_write, struct file *file, const loff_t *ppos, size_t
 			return retval;
 	}
 
+	// 強制ロックが可能かどうかの判定
 	if (unlikely(inode->i_flctx && mandatory_lock(inode))) {
 		retval = locks_mandatory_area(inode, file, pos, pos + count - 1,
 				read_write == READ ? F_RDLCK : F_WRLCK);
@@ -482,8 +485,10 @@ ssize_t __vfs_write(struct file *file, const char __user *p, size_t count,
 		    loff_t *pos)
 {
 	if (file->f_op->write)
+		// ファイルシステム固有のwriteを実行
 		return file->f_op->write(file, p, count, pos);
 	else if (file->f_op->write_iter)
+		// ファイルシステム固有のwrite_iterを実行
 		return new_sync_write(file, p, count, pos);
 	else
 		return -EINVAL;
@@ -535,23 +540,34 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 	ssize_t ret;
 
 	if (!(file->f_mode & FMODE_WRITE))
+		// writeモードでファイルをopenしていない場合は、EBADFを返す
 		return -EBADF;
 	if (!(file->f_mode & FMODE_CAN_WRITE))
+		// ファイルシステムがwriteに対応していない場合はEINVALを返す
 		return -EINVAL;
 	if (unlikely(!access_ok(VERIFY_READ, buf, count)))
+		// 書き込み先のアドレスが不適切であればEFAULTを返す
 		return -EFAULT;
 
 	ret = rw_verify_area(WRITE, file, pos, count);
 	if (!ret) {
 		if (count > MAX_RW_COUNT)
+			// countがwrite可能な最大値を超えていた場合は、write可能な最大値に切詰める
 			count =  MAX_RW_COUNT;
+		// ファイルシステムが持つセマフォを獲得
 		file_start_write(file);
+
 		ret = __vfs_write(file, buf, count, pos);
 		if (ret > 0) {
+			// ファイルに変更があったことをfsnotifyに通知
 			fsnotify_modify(file);
+			// taskstatsのためにwriteできたバイト数を通知
 			add_wchar(current, ret);
 		}
+		// taskstatsのためにwriteが呼ばれた回数をinc
 		inc_syscw(current);
+
+		// ファイルシステムが持つセマフォを解放
 		file_end_write(file);
 	}
 
@@ -590,13 +606,16 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 
 ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 {
+	// writeを呼び出したプロセスのファイルディスクリプタテーブルからfd構造体を取得
 	struct fd f = fdget_pos(fd);
 	ssize_t ret = -EBADF;
 
 	if (f.file) {
+		// ファイル位置を取得
 		loff_t pos = file_pos_read(f.file);
 		ret = vfs_write(f.file, buf, count, &pos);
 		if (ret >= 0)
+			// writeに成功したらファイル位置を更新
 			file_pos_write(f.file, pos);
 		fdput_pos(f);
 	}
@@ -648,7 +667,7 @@ ssize_t ksys_pwrite64(unsigned int fd, const char __user *buf,
 	f = fdget(fd);
 	if (f.file) {
 		ret = -ESPIPE;
-		if (f.file->f_mode & FMODE_PWRITE)  
+		if (f.file->f_mode & FMODE_PWRITE)
 			ret = vfs_write(f.file, buf, count, &pos);
 		fdput(f);
 	}

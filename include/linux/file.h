@@ -49,6 +49,14 @@ extern void __f_unlock_pos(struct file *);
 
 static inline struct fd __to_fd(unsigned long v)
 {
+	/**
+	 * struct fd fd;
+	 * fd.file = (struct file *)(v & ~3);
+	 * fd.flags = v & 3
+	 * という意味
+	 * vはfile*のため32/64bitでアラインメントされているため、
+	 * 下位2bitはflagとして使用しても問題ないという感じ
+	 */
 	return (struct fd){(struct file *)(v & ~3),v & 3};
 }
 

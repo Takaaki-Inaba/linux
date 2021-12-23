@@ -95,6 +95,11 @@ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, un
  * checks that the pointer is in the user space range - after calling
  * this function, memory access functions may still return -EFAULT.
  */
+// addrがユーザ空間内に収まっているかをチェックするマクロ
+// カーネル空間が使用する領域は、ユーザ空間がアクセスしてもCPUで例外に
+// ならない。これは仮想アドレスのどの範囲がユーザ空間のアドレスで
+// どこからがカーネル空間か判別できないため。そのため、カーネル側でアドレスから
+// ユーザ空間内に収まっているかをチェックする
 #define access_ok(type, addr, size)					\
 ({									\
 	WARN_ON_IN_IRQ();						\

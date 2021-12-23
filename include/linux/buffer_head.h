@@ -60,13 +60,25 @@ typedef void (bh_end_io_t)(struct buffer_head *bh, int uptodate);
  * a page (via a page_mapping) and for wrapping bio submission
  * for backward compatibility reasons (e.g. submit_bh).
  */
+// ページキャッシュをより細かく使うために利用される構造体
+// ページキャッシュはページ単位（4KB or 8KB）で管理されるため、
+// それよりも小さいブロックサイズ（ブロックデバイスによりサイズが異なる）で管理される
+// ブロックデバイスのキャッシュで使われる。
+// この構造体は昔はページキャッシュと独立してたが、v2.6でページキャッシュと統合された
+// buffer_head自体はslabアロケータで領域を確保する
 struct buffer_head {
 	unsigned long b_state;		/* buffer state bitmap (see above) */
+
+	// 同一ページに関連付けられたbuffer_headの単方向リスト
 	struct buffer_head *b_this_page;/* circular list of page's buffers */
+
+	// 関連付けられたページへのポインタ
 	struct page *b_page;		/* the page this bh is mapped to */
 
 	sector_t b_blocknr;		/* start block number */
 	size_t b_size;			/* size of mapping */
+
+	// buffer_headに対応付けられた領域へのアドレス
 	char *b_data;			/* pointer to data within the page */
 
 	struct block_device *b_bdev;
